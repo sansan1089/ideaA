@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prosody → Music v3</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;1,300&family=Unbounded:wght@200;400;700&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --happy:#F6C90E;
+  --sad:#5B8DEF;
+  --meh:#6B7280;
+  --bg:#080810;
+  --surf:#10101C;
+  --border:#1A1A2E;
+  --text:#EEEEF5;
+  --dim:#3A3A5C;
+}
+body{background:var(--bg);color:var(--text);font-family:'DM Mono',monospace;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+header{padding:14px 24px 10px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border);flex-shrink:0}
+.logo{font-family:'Unbounded',sans-serif;font-weight:200;font-size:11px;letter-spacing:.18em}
+.logo b{font-weight:700;color:var(--happy)}
+.pill{font-size:9px;letter-spacing:.14em;padding:2px 9px;border-radius:20px;border:1px solid var(--border);color:var(--dim);transition:all .3s}
+.pill.on{border-color:var(--happy);color:var(--happy)}
+.pill.think{border-color:#A78BFA;color:#A78BFA}
+.pill.err{border-color:#F87171;color:#F87171}
+#llm-pill{margin-left:auto}
+
+main{flex:1;display:grid;grid-template-columns:1fr 280px;grid-template-rows:1fr auto auto;min-height:0}
+
+#vis{grid-column:1;grid-row:1;position:relative;min-height:0;overflow:hidden}
+#vis canvas{display:block}
+
+#tx-area{grid-column:1;grid-row:2;padding:10px 20px 0}
+.sec-label{font-size:9px;letter-spacing:.2em;color:var(--dim);margin-bottom:5px}
+#tx-box{background:var(--surf);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-size:11px;color:var(--text);line-height:1.6;min-height:34px;transition:border-color .3s;font-style:italic}
+#tx-box.live{border-color:color-mix(in srgb,var(--cur,var(--meh)) 60%,transparent)}
+.interim{color:var(--dim)}
+
+#ctrl{grid-column:1;grid-row:3;padding:12px 20px;display:flex;align-items:center;gap:12px}
+#btn{font-family:'DM Mono',monospace;font-size:11px;letter-spacing:.14em;padding:9px 22px;border-radius:4px;border:1px solid var(--dim);background:transparent;color:var(--text);cursor:pointer;transition:all .2s;flex-shrink:0}
+#btn:hover{border-color:var(--text)}
+#btn.on{border-color:var(--happy);color:var(--happy)}
+.vt{flex:1;height:2px;background:var(--border);border-radius:1px;overflow:hidden}
+.vf{height:100%;border-radius:1px;transition:width .06s linear,background .4s}
+.hint{font-size:10px;color:var(--dim);font-style:italic}
+
+/* Right panel */
+#panel{grid-column:2;grid-row:1/4;display:flex;flex-direction:column;gap:0;border-left:1px solid var(--border);overflow:hidden}
+
+.cat-block{flex:1;display:flex;flex-direction:column;justify-content:center;padding:20px 20px;border-bottom:1px solid var(--border);transition:background .5s;position:relative;overflow:hidden}
+.cat-block:last-child{border-bottom:none}
+.cat-block::before{content:'';position:absolute;inset:0;opacity:0;transition:opacity .5s}
+.cat-block.active::before{opacity:1}
+
+#block-happy::before{background:radial-gradient(ellipse at 30% 50%,color-mix(in srgb,var(--happy) 12%,transparent),transparent 70%)}
+#block-sad::before{background:radial-gradient(ellipse at 30% 50%,color-mix(in srgb,var(--sad) 12%,transparent),transparent 70%)}
+#block-meh::before{background:radial-gradient(ellipse at 30% 50%,color-mix(in srgb,var(--meh) 8%,transparent),transparent 70%)}
+
+.cat-icon{font-size:28px;margin-bottom:8px;transition:transform .4s}
+.cat-block.active .cat-icon{transform:scale(1.15)}
+.cat-name{font-family:'Unbounded',sans-serif;font-weight:400;font-size:12px;letter-spacing:.1em;margin-bottom:4px;transition:color .3s}
+.cat-desc{font-size:10px;color:var(--dim);line-height:1.5;font-style:italic;margin-bottom:10px}
+.cat-bar{height:3px;background:var(--border);border-radius:2px;overflow:hidden}
+.cat-fill{height:100%;border-radius:2px;transition:width .35s ease}
+
+#reason-wrap{padding:14px 20px;border-top:1px solid var(--border);flex-shrink:0}
+#reason{font-size:10px;color:var(--dim);line-height:1.6;min-height:32px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">SPEECH <b>/</b> MUSIC</div>
+  <div class="pill" id="status-pill">STANDBY</div>
+  <div class="pill" id="llm-pill">AI —</div>
+</header>
+
+<main>
+  <div id="vis"></div>
+
+  <div id="tx-area">
+    <div class="sec-label">TRANSCRIPT</div>
+    <div id="tx-box">話してください...</div>
+  </div>
+
+  <div id="ctrl">
+    <button id="btn" onclick="toggle()">[ START ]</button>
+    <div class="vt"><div class="vf" id="vf" style="width:0%"></div></div>
+    <div class="hint">他者の会話を聴かせてください</div>
+  </div>
+
+  <div id="panel">
+    <div class="cat-block" id="block-happy">
+      <div class="cat-icon">◎</div>
+      <div class="cat-name" style="color:var(--happy)">HAPPY</div>
+      <div class="cat-desc">褒め言葉・感謝・良い知らせ<br>言われたら嬉しい言葉</div>
+      <div class="cat-bar"><div class="cat-fill" id="fill-happy" style="width:0%;background:var(--happy)"></div></div>
+    </div>
+
+    <div class="cat-block" id="block-sad">
+      <div class="cat-icon">△</div>
+      <div class="cat-name" style="color:var(--sad)">SAD</div>
+      <div class="cat-desc">批判・否定・悪い知らせ<br>言われたら傷つく言葉</div>
+      <div class="cat-bar"><div class="cat-fill" id="fill-sad" style="width:0%;background:var(--sad)"></div></div>
+    </div>
+
+    <div class="cat-block" id="block-meh">
+      <div class="cat-icon">—</div>
+      <div class="cat-name" style="color:var(--meh)">MEH</div>
+      <div class="cat-desc">日常会話・事実報告<br>どうでもいい話</div>
+      <div class="cat-bar"><div class="cat-fill" id="fill-meh" style="width:0%;background:var(--meh)"></div></div>
+    </div>
+
+    <div id="reason-wrap">
+      <div class="sec-label" style="margin-bottom:6px">AI の判断</div>
+      <div id="reason">—</div>
+    </div>
+  </div>
+</main>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+const CATS    = ['happy','sad','meh'];
+const COL     = {happy:[246,201,14], sad:[91,141,239], meh:[107,114,128]};
+const COL_CSS = {happy:'var(--happy)', sad:'var(--sad)', meh:'var(--meh)'};
+
+let running=false, audioCtx=null, analyser=null, micStream=null, recog=null;
+let smoothEnergy=0, smoothPitch=0, pitchHistory=[], speechBuf=[], tempoEst=100;
+let cur='meh';
+let scores={happy:.1, sad:.1, meh:.8};
+let txFull='', txInterim='';
+let llmBusy=false, lastLlm=0;
+const LLM_IV=3000;
+let beatStep=0, musicTimer=null, oscs=[];
+
+// ── UI helpers ──────────────────────────────────────────────────────────────
+function setPill(id,txt,cls){const e=document.getElementById(id);e.textContent=txt;e.className='pill'+(cls?' '+cls:'')}
+function updatePanel(){
+  CATS.forEach(c=>{
+    document.getElementById('fill-'+c).style.width=(scores[c]*100)+'%';
+    document.getElementById('block-'+c).classList.toggle('active', cur===c);
+  });
+  document.getElementById('vf').style.background=`rgb(${COL[cur].join(',')})`;
+  document.getElementById('tx-box').style.setProperty('--cur', COL_CSS[cur]);
+}
+
+// ── Session ─────────────────────────────────────────────────────────────────
+async function toggle(){ running ? stop() : await start() }
+
+async function start(){
+  try{
+    audioCtx=new AudioContext();
+    micStream=await navigator.mediaDevices.getUserMedia({audio:true});
+    const src=audioCtx.createMediaStreamSource(micStream);
+    analyser=audioCtx.createAnalyser();
+    analyser.fftSize=2048; analyser.smoothingTimeConstant=.8;
+    src.connect(analyser);
+    initRecog();
+    running=true;
+    document.getElementById('btn').textContent='[ STOP ]';
+    document.getElementById('btn').classList.add('on');
+    setPill('status-pill','LISTENING','on');
+    requestAnimationFrame(audioLoop);
+    scheduleMusic();
+  }catch(e){
+    setPill('status-pill','MIC ERR','err');
+    alert('マイクを許可してください: '+e.message);
+  }
+}
+
+function stop(){
+  running=false;
+  micStream?.getTracks().forEach(t=>t.stop());
+  audioCtx?.close();
+  try{recog?.stop()}catch(e){}
+  clearTimeout(musicTimer);
+  oscs.forEach(o=>{try{o.stop()}catch(e){}});
+  oscs=[]; txFull=''; txInterim='';
+  document.getElementById('btn').textContent='[ START ]';
+  document.getElementById('btn').classList.remove('on');
+  setPill('status-pill','STANDBY','');
+  setPill('llm-pill','AI —','');
+}
+
+// ── Speech Recognition ───────────────────────────────────────────────────────
+function initRecog(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){setPill('llm-pill','SR N/A','err');return}
+  recog=new SR();
+  recog.continuous=true; recog.interimResults=true; recog.lang='ja-JP';
+
+  recog.onresult=e=>{
+    let interim='';
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      const t=e.results[i][0].transcript;
+      if(e.results[i].isFinal){
+        txFull+=t+'。';
+        if(txFull.length>400) txFull=txFull.slice(txFull.length-400);
+      } else interim+=t;
+    }
+    txInterim=interim;
+    updateTx();
+    maybeCallLLM();
+  };
+  recog.onerror=e=>{ if(e.error!=='no-speech') setPill('llm-pill','SR ERR','err') };
+  recog.onend=()=>{ if(running) try{recog.start()}catch(e){} };
+  recog.start();
+}
+
+function updateTx(){
+  const box=document.getElementById('tx-box');
+  const last=txFull.slice(-150);
+  const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  box.innerHTML=last
+    ? `${esc(last)}<span class="interim"> ${esc(txInterim)}</span>`
+    : `<span class="interim">${esc(txInterim)||'話してください...'}</span>`;
+  box.classList.toggle('live', !!txInterim);
+}
+
+// ── LLM Classification ───────────────────────────────────────────────────────
+async function maybeCallLLM(){
+  const now=Date.now();
+  const text=(txFull+txInterim).trim();
+  if(llmBusy||now-lastLlm<LLM_IV||text.length<8) return;
+  llmBusy=true; lastLlm=now;
+  setPill('llm-pill','THINKING…','think');
+
+  const prompt=`あなたは発話内容分析AIです。以下の発話を分析し、これを【聴いているリスナー】の視点から3分類してください。
+
+発話内容:「${text}」
+
+【分類基準】
+- happy: リスナーが言われたら嬉しいと感じる内容（褒め言葉・感謝・共感・良い知らせ・応援など）
+- sad: リスナーが言われたら悲しい/傷つくと感じる内容（批判・否定・悪い知らせ・軽視・拒絶など）
+- meh: どちらでもない内容（日常雑談・事実報告・天気・手続きなど感情的影響が薄い話）
+
+以下のJSON形式のみで回答してください（他のテキスト不要）:
+{"category":"happy|sad|meh","scores":{"happy":0.0,"sad":0.0,"meh":0.0},"reason":"20字以内の日本語理由"}
+
+scores合計=1.0`;
+
+  try{
+    const res=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:'claude-sonnet-4-20250514',
+        max_tokens:150,
+        messages:[{role:'user',content:prompt}]
+      })
+    });
+    const data=await res.json();
+    const raw=data.content?.map(c=>c.text||'').join('').trim();
+    const json=JSON.parse(raw.replace(/```json?|```/g,'').trim());
+
+    CATS.forEach(c=>{
+      const t=json.scores?.[c]??(json.category===c?.7:.15);
+      scores[c]=scores[c]*.35+t*.65;
+    });
+    // normalise
+    const tot=CATS.reduce((s,c)=>s+scores[c],0);
+    CATS.forEach(c=>scores[c]/=tot);
+
+    let best='meh',bestV=0;
+    CATS.forEach(c=>{if(scores[c]>bestV){bestV=scores[c];best=c;}});
+    cur=best;
+
+    document.getElementById('reason').textContent=json.reason||'—';
+    setPill('llm-pill','AI ✓','on');
+    updatePanel();
+  }catch(err){
+    setPill('llm-pill','ERR','err');
+    console.error(err);
+  }finally{llmBusy=false}
+}
+
+// ── Audio analysis ───────────────────────────────────────────────────────────
+function audioLoop(){
+  if(!running) return;
+  const buf=new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(buf);
+  let rms=0; for(let i=0;i<buf.length;i++) rms+=buf[i]*buf[i];
+  rms=Math.sqrt(rms/buf.length);
+  const pitch=estimatePitch(buf,audioCtx.sampleRate);
+  const a=.1;
+  smoothEnergy=smoothEnergy*(1-a)+rms*a;
+  if(pitch>80&&pitch<800) smoothPitch=smoothPitch*(1-a)+pitch*a;
+  pitchHistory.push(smoothPitch); if(pitchHistory.length>80) pitchHistory.shift();
+  speechBuf.push(rms); if(speechBuf.length>200) speechBuf.shift();
+  estimateTempo();
+
+  document.getElementById('vf').style.width=Math.min(100,smoothEnergy*800)+'%';
+  updatePanel();
+  requestAnimationFrame(audioLoop);
+}
+
+function estimatePitch(buf,sr){
+  const N=1024; const c=new Float32Array(N);
+  for(let l=0;l<N;l++) for(let i=0;i<N;i++) c[l]+=buf[i]*buf[i+l];
+  let dip=false;
+  for(let i=1;i<N;i++){if(c[i]<c[i-1])dip=true; if(dip&&c[i]>c[i-1]) return sr/i;}
+  return 0;
+}
+
+function estimateTempo(){
+  if(speechBuf.length<100) return;
+  const m=speechBuf.reduce((s,v)=>s+v,0)/speechBuf.length;
+  let on=0;
+  for(let i=1;i<speechBuf.length;i++) if(speechBuf[i]>m*1.5&&speechBuf[i-1]<=m*1.5) on++;
+  const bpm=(on/1.6)*60;
+  if(bpm>40&&bpm<300) tempoEst=tempoEst*.9+bpm*.1;
+}
+
+// ── Music Engine ─────────────────────────────────────────────────────────────
+// happy: 明るいCメジャー、軽快な4つ打ち、高音域サイン波
+// sad:   Cマイナー、スパースなリズム、低音持続、長いリリース
+// meh:   不規則、ランダムステップ、中音域
+const SCALES={
+  happy:[523.3,587.3,659.3,698.5,784.0,880.0,1046.5], // C5 major
+  sad:  [261.6,311.1,349.2,392.0,466.2,523.3,622.3],  // C4 minor
+  meh:  [349.2,392.0,440.0,466.2,523.3,587.3,622.3]   // F4 mix
+};
+const PATTERNS={
+  happy:[1,0,1,0,1,0,1,0,1,1,1,0,1,0,1,1], // bouncy 16ths
+  sad:  [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0], // very sparse
+  meh:  null                                  // random
+};
+const BPM={happy:136, sad:56, meh:104};
+const WAVE={happy:'sine', sad:'triangle', meh:'square'};
+const ATK={happy:.008, sad:.1, meh:.02};
+const REL={happy:.15, sad:.9, meh:.18};
+const OCT={happy:1, sad:.5, meh:1};
+
+function scheduleMusic(){
+  if(!running) return;
+  const interval=60000/BPM[cur]/4;
+  const pat=PATTERNS[cur];
+  const hit=pat?pat[beatStep%pat.length]:(Math.random()>.6?1:0);
+  if(hit&&audioCtx) playNote();
+  beatStep++;
+  musicTimer=setTimeout(scheduleMusic,interval);
+}
+
+function playNote(){
+  const scale=SCALES[cur];
+  const now=audioCtx.currentTime;
+  // melodic step for happy/sad, random for meh
+  let freq;
+  if(cur==='meh') freq=scale[Math.floor(Math.random()*scale.length)];
+  else freq=scale[Math.floor(beatStep*0.41)%scale.length];
+  freq*=OCT[cur];
+
+  const gain=0.1*(0.6+smoothEnergy*8);
+  const osc=audioCtx.createOscillator();
+  const env=audioCtx.createGain();
+  osc.type=WAVE[cur];
+  osc.frequency.setValueAtTime(freq,now);
+
+  // Pitch expression
+  if(cur==='happy') osc.frequency.linearRampToValueAtTime(freq*1.015,now+ATK[cur]);
+  if(cur==='sad')   osc.frequency.linearRampToValueAtTime(freq*.985,now+REL[cur]*.4);
+
+  env.gain.setValueAtTime(0,now);
+  env.gain.linearRampToValueAtTime(gain,now+ATK[cur]);
+  env.gain.exponentialRampToValueAtTime(.001,now+ATK[cur]+REL[cur]);
+  osc.connect(env); env.connect(audioCtx.destination);
+  osc.start(now); osc.stop(now+ATK[cur]+REL[cur]+.02);
+  oscs.push(osc);
+  osc.onended=()=>{oscs=oscs.filter(o=>o!==osc)};
+}
+
+// ── p5 Visualizer ─────────────────────────────────────────────────────────────
+new p5(p=>{
+  let particles=[], W, H;
+
+  class Pt {
+    constructor(){
+      this.c=COL[cur];
+      this.x=W/2+p.random(-40,40);
+      this.y=H/2+p.random(-40,40);
+      this.vx=p.random(-2.5,2.5);
+      this.vy=p.random(-2.5,2.5);
+      this.life=1; this.size=p.random(3,11);
+      this.decay=p.random(.007,.022);
+    }
+    update(){
+      if(cur==='happy'){
+        // spiral upward
+        this.vx+=p.sin(p.frameCount*.06+this.y*.012)*.35;
+        this.vy+=p.cos(p.frameCount*.06+this.x*.012)*.35-.08;
+      } else if(cur==='sad'){
+        // drift down slowly
+        this.vy+=.05; this.vx*=.97;
+        this.vy*=.98;
+      } else {
+        // wander
+        this.vx+=p.random(-.4,.4);
+        this.vy+=p.random(-.4,.4);
+        this.vx*=.97; this.vy*=.97;
+      }
+      this.x+=this.vx; this.y+=this.vy;
+      const spd=cur==='sad'?.5:cur==='happy'?1.4:1;
+      this.life-=this.decay*spd;
+    }
+    draw(){
+      const c=COL[cur];
+      p.noStroke();
+      p.fill(c[0],c[1],c[2],this.life*(cur==='sad'?140:170));
+      p.ellipse(this.x,this.y,this.size*this.life);
+    }
+    dead(){return this.life<=0||this.x<-30||this.x>W+30||this.y<-30||this.y>H+30}
+  }
+
+  p.setup=()=>{
+    const el=document.getElementById('vis');
+    W=el.offsetWidth; H=el.offsetHeight||320;
+    p.createCanvas(W,H).parent('vis');
+  };
+
+  p.draw=()=>{
+    p.background(8,8,16, cur==='happy'?25:cur==='sad'?18:22);
+
+    // Waveform ring
+    if(running&&analyser){
+      const wb=new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteTimeDomainData(wb);
+      const c=COL[cur];
+      p.stroke(c[0],c[1],c[2],90); p.strokeWeight(1); p.noFill();
+      const r=Math.min(W,H)*.25;
+      p.beginShape();
+      for(let i=0;i<wb.length;i+=4){
+        const ang=p.map(i,0,wb.length,0,p.TWO_PI);
+        const amp=p.map(wb[i],0,255,-26,26);
+        p.vertex(W/2+(r+amp)*p.cos(ang),H/2+(r+amp)*p.sin(ang));
+      }
+      p.endShape(p.CLOSE);
+    }
+
+    // Spawn
+    if(running){
+      const rate={happy:5,sad:1,meh:2}[cur];
+      const boost=Math.floor(smoothEnergy*120);
+      for(let i=0;i<rate+boost;i++) particles.push(new Pt());
+    } else {
+      if(p.frameCount%8===0){const pt=new Pt();pt.x=W/2+p.random(-80,80);pt.y=H/2+p.random(-80,80);particles.push(pt);}
+    }
+
+    for(let i=particles.length-1;i>=0;i--){
+      particles[i].update(); particles[i].draw();
+      if(particles[i].dead()) particles.splice(i,1);
+    }
+    if(particles.length>700) particles.splice(0,particles.length-700);
+
+    // Centre label
+    const c=COL[cur];
+    p.noStroke();
+    p.fill(c[0],c[1],c[2],running?210:45);
+    p.textFont('Unbounded'); p.textSize(running?13:9);
+    p.textAlign(p.CENTER,p.CENTER);
+    p.text(running?cur.toUpperCase():'WAITING',W/2,H/2);
+  };
+}, document.getElementById('vis'));
+</script>
+</body>
+</html>
