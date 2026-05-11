@@ -244,7 +244,7 @@ async function maybeCallLLM(){
 scores合計=1.0`;
 
   try{
-    const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=AIzaSyAwOK37y3VBUb7Z-YofGOjpGxGKRMbrkK8`,{
+    const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyAwOK37y3VBUb7Z-YofGOjpGxGKRMbrkK8`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
